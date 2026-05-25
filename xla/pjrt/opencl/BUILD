@@ -5,10 +5,12 @@ cc_library(
     srcs = [
         "opencl_client.cc",
         "opencl_runtime.cc",
+        "opencl_buffer.cc"
     ],
     hdrs = [
         "opencl_client.h",
         "opencl_runtime.h",
+        "opencl_buffer.h"
     ],
     visibility = ["//xla/pjrt/c:__pkg__"],
     deps = [
