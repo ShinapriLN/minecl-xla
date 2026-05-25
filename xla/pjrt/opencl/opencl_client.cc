@@ -1,7 +1,9 @@
 #include "xla/pjrt/opencl/opencl_client.h"
+#include "xla/pjrt/opencl/opencl_runtime.h"
 
 #include <memory>
 #include <vector>
+#include "absl/strings/str_cat.h"
 #include "absl/types/span.h"
 #include "xla/pjrt/pjrt_device_description.h"
 
@@ -15,8 +17,11 @@ class OpenClPjRtClient;
 
 class OpenClPjRtMemorySpace final : public xla::PjRtMemorySpace {
  public:
-  explicit OpenClPjRtMemorySpace(OpenClPjRtClient* client)
+  explicit OpenClPjRtMemorySpace(OpenClPjRtClient* client, const OpenClDeviceInfo& info)
     : client_(client),
+      id_(info.id),
+      debug_string_(absl::StrCat("OpenCLMemorySpace(id=", info.id, ")")),
+      to_string_(debug_string_),
       c_memory_(this) {}
 
   PJRT_Memory* ToCApiPtr() override {
@@ -30,11 +35,11 @@ class OpenClPjRtMemorySpace final : public xla::PjRtMemorySpace {
         devices_.data(), devices_.size());
   }
 
-  int id() const override { return 0; }
+  int id() const override { return id_; }
   absl::string_view kind() const override { return "device"; }
   int kind_id() const override { return 0; }
-  absl::string_view DebugString() const override { return "OpenCLMemory(id=0)"; }
-  absl::string_view ToString() const override { return "OpenCLMemory(id=0)"; }
+  absl::string_view DebugString() const override { return debug_string_; }
+  absl::string_view ToString() const override { return to_string_; }
 
   void AddDevice(xla::PjRtDevice* device) {
     devices_.push_back(device);
@@ -42,17 +47,28 @@ class OpenClPjRtMemorySpace final : public xla::PjRtMemorySpace {
 
  private:
   OpenClPjRtClient* client_;
+  int id_;
+  std::string debug_string_;
+  std::string to_string_;
+
   std::vector<xla::PjRtDevice*> devices_;
   xla::PjRtMemorySpaceCApiDelegator c_memory_;
 };
 
 class OpenClPjRtDeviceDescription final : public xla::PjRtDeviceDescription {
  public:
-  int id() const override { return 0; }
+  explicit OpenClPjRtDeviceDescription(const OpenClDeviceInfo& info)
+      : info_(info),
+        debug_string_(absl::StrCat("OpenCLDevice(id=", info.id, ")")),
+        to_string_(debug_string_) {}
+  int id() const override { return info_.id; }
   int process_index() const override { return 0; }
-  absl::string_view device_kind() const override { return "OpenCL Fake Device"; }
-  absl::string_view DebugString() const override { return "OpenCLDevice(id=0)"; }
-  absl::string_view ToString() const override { return "OpenCLDevice(id=0)"; }
+
+  absl::string_view device_kind() const override {
+    return info_.name;
+  }
+  absl::string_view DebugString() const override { return debug_string_; }
+  absl::string_view ToString() const override { return to_string_; }
 
   const absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute>&
   Attributes() const override {
@@ -60,15 +76,16 @@ class OpenClPjRtDeviceDescription final : public xla::PjRtDeviceDescription {
   }
 
  private:
+  OpenClDeviceInfo info_;
   absl::flat_hash_map<std::string, xla::PjRtDeviceAttribute> attributes_;
+  std::string debug_string_;
+  std::string to_string_;
 };
 
 class OpenClPjRtDevice final : public xla::PjRtDevice {
-  OpenClPjRtDeviceDescription description_;
  public:
-  OpenClPjRtDevice(OpenClPjRtClient* client, OpenClPjRtMemorySpace* memory)
-      : client_(client), memory_(memory) {
-
+  OpenClPjRtDevice(OpenClPjRtClient* client, OpenClPjRtMemorySpace* memory, const OpenClDeviceInfo& info)
+      : client_(client), memory_(memory), info_(info), description_(info) {
     memory_spaces_.push_back(memory_);
   }
 
@@ -78,8 +95,9 @@ class OpenClPjRtDevice final : public xla::PjRtDevice {
 
   xla::PjRtClient* client() const override;
   bool IsAddressable() const override { return true; }
+
   xla::LocalChipId local_hardware_id() const override {
-    return xla::LocalChipId(0);
+    return xla::LocalChipId(info_.id);
   }
 
   std::unique_ptr<xla::ScopedAsyncTrackingEvent> CreateAsyncTrackingEvent(
@@ -108,40 +126,56 @@ class OpenClPjRtDevice final : public xla::PjRtDevice {
  private:
   OpenClPjRtClient* client_;
   OpenClPjRtMemorySpace* memory_;
+  OpenClDeviceInfo info_;
+  OpenClPjRtDeviceDescription description_;
   std::vector<xla::PjRtMemorySpace*> memory_spaces_;
 };
 
 class OpenClPjRtClient final : public xla::PjRtClient {
  public:
   OpenClPjRtClient() {
-    memory_ = std::make_unique<OpenClPjRtMemorySpace>(this);
-    device_ = std::make_unique<OpenClPjRtDevice>(this, memory_.get());
+    auto infos = EnumerateOpenClDevices();
+    // if (!infos.ok()) {
+    //   // return error จาก factory ดีกว่า constructor throw
+    // }
 
-    xla::PjRtDevice* device_ptr =
-        static_cast<xla::PjRtDevice*>(device_.get());
+    for (const auto& info : *infos) {
+      auto memory = std::make_unique<OpenClPjRtMemorySpace>(this, info);
+      auto device = std::make_unique<OpenClPjRtDevice>(
+          this,
+          memory.get(),
+          info);
 
-    xla::PjRtMemorySpace* memory_ptr =
-        static_cast<xla::PjRtMemorySpace*>(memory_.get());
+      xla::PjRtDevice* device_ptr = device.get();
+      xla::PjRtMemorySpace* memory_ptr = memory.get();
 
-    memory_->AddDevice(device_ptr);
+      memory->AddDevice(device_ptr);
 
-    devices_.push_back(device_ptr);
-    addressable_devices_.push_back(device_ptr);
-    memory_spaces_.push_back(memory_ptr);
+      devices_.push_back(device_ptr);
+      addressable_devices_.push_back(device_ptr);
+      memory_spaces_.push_back(memory_ptr);
+
+      owned_memory_spaces_.push_back(std::move(memory));
+      owned_devices_.push_back(std::move(device));
+    }
   }
 
   absl::StatusOr<xla::PjRtDevice*> LookupDevice(
       xla::GlobalDeviceId global_device_id) const override {
-    if (global_device_id.value() == 0) {
-      return devices_[0];
+    for (xla::PjRtDevice* device : devices_) {
+      if (device->id() == global_device_id.value()) {
+        return device;
+      }
     }
     return absl::NotFoundError("OpenCL device not found");
   }
 
   absl::StatusOr<xla::PjRtDevice*> LookupAddressableDevice(
       xla::LocalDeviceId local_device_id) const override {
-    if (local_device_id.value() == 0) {
-      return addressable_devices_[0];
+    for (xla::PjRtDevice* device : addressable_devices_) {
+      if (device->local_hardware_id().value() == local_device_id.value()) {
+        return device;
+      }
     }
     return absl::NotFoundError("OpenCL addressable device not found");
   }
@@ -173,12 +207,12 @@ class OpenClPjRtClient final : public xla::PjRtClient {
 
   absl::string_view platform_name() const override { return "opencl"; }
   absl::string_view platform_version() const override {
-    return "opencl experimental";
+    return "OpenCL 3.0 / minecl experimental";
   }
 
  private:
-  std::unique_ptr<OpenClPjRtMemorySpace> memory_;
-  std::unique_ptr<OpenClPjRtDevice> device_;
+  std::vector<std::unique_ptr<OpenClPjRtDevice>> owned_devices_;
+  std::vector<std::unique_ptr<OpenClPjRtMemorySpace>> owned_memory_spaces_;
 
   std::vector<xla::PjRtDevice*> devices_;
   std::vector<xla::PjRtDevice*> addressable_devices_;
