@@ -196,7 +196,7 @@ absl::StatusOr<std::vector<OpenClDeviceInfo>> EnumerateOpenClDevices(){
     return opencl_device_info;
 }
 
-static absl::StatusOr<std::shared_ptr<OpenClRuntime>> OpenClRuntime::Create(
+absl::StatusOr<std::shared_ptr<OpenClRuntime>> OpenClRuntime::Create(
     cl_platform_id platform, 
     cl_device_id device
 ){
@@ -216,7 +216,7 @@ static absl::StatusOr<std::shared_ptr<OpenClRuntime>> OpenClRuntime::Create(
         1, &device,
         NULL, NULL,
         &errcode
-    )   
+    );
     if(errcode != CL_SUCCESS){
         return absl::InternalError("Create::clCreateContext failed");
     }
@@ -224,22 +224,24 @@ static absl::StatusOr<std::shared_ptr<OpenClRuntime>> OpenClRuntime::Create(
     cl_queue_properties queue_props[] = {
         CL_QUEUE_PROPERTIES,
         0, 0
-    }
+    };
 
-    queue = clCreateCommandQueueWithProperties(
+    command_queue = clCreateCommandQueueWithProperties(
         context,
         device,
         queue_props,
         &errcode
-    )
+    );
     if(errcode != CL_SUCCESS){
         clReleaseContext(context);
         return absl::InternalError("Create::clCreateCommandQueueWithProperties failed");
     }
 
-    return std::make_shared<OpenClRuntime>(
-        device, platform, context, queue
-    )
+    return std::shared_ptr<OpenClRuntime>(
+        new OpenClRuntime(
+            device, platform, context, command_queue
+        )
+    );
 } 
 
 absl::StatusOr<cl_mem> OpenClRuntime::Allocate(
@@ -250,10 +252,10 @@ absl::StatusOr<cl_mem> OpenClRuntime::Allocate(
     cl_mem buffer;
 
     buffer = clCreateBuffer(
-        context, flag,
+        context_, flag,
         byte_size, nullptr,
         &errcode
-    )
+    );
     if (errcode != CL_SUCCESS){
         return absl::InternalError("Allocate failed");
     }
@@ -268,12 +270,12 @@ absl::Status OpenClRuntime::CopyHostToDevice(
 ){
     cl_int errcode;
     errcode = clEnqueueWriteBuffer(
-        queue, dst,
+        queue_, dst,
         CL_TRUE,
         0, byte_size,
         src, 0,
         nullptr, nullptr
-    )
+    );
     if (errcode != CL_SUCCESS) {
         return absl::InternalError("CopyHostToDevice failed");
     }
@@ -288,13 +290,13 @@ absl::Status OpenClRuntime::CopyDeviceToHost(
 ){
     cl_int errcode;
     errcode = clEnqueueReadBuffer(
-        queue,
+        queue_,
         src,
         CL_TRUE,
         0, byte_size,
         dst, 0,
         nullptr, nullptr
-    )
+    );
     if(errcode != CL_SUCCESS){
         return absl::InternalError("CopyDeviceToHost failed");
     }
@@ -304,7 +306,7 @@ absl::Status OpenClRuntime::CopyDeviceToHost(
 
 absl::Status OpenClRuntime::Finish(){
     cl_int errcode;
-    errcode = clFinish(queue);
+    errcode = clFinish(queue_);
     if (errcode != CL_SUCCESS){
         return absl::InternalError("Finish failed");
     }
@@ -315,5 +317,16 @@ absl::Status OpenClRuntime::Finish(){
 cl_context OpenClRuntime::context() const{ return context_; }
 cl_command_queue OpenClRuntime::queue() const{ return queue_; }
 cl_device_id OpenClRuntime::device() const{ return device_; }
+
+OpenClRuntime::OpenClRuntime(
+    cl_device_id device, 
+    cl_platform_id platform, 
+    cl_context context, 
+    cl_command_queue queue
+): 
+platform_(platform),
+device_(device), 
+context_(context),
+queue_(queue) {}
 
 } //namespace minecl

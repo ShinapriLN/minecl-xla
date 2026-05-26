@@ -4,6 +4,8 @@
 #include <CL/cl.h>
 #include "absl/status/status.h"
 
+#include "xla/pjrt/opencl/opencl_runtime.h"
+
 namespace minecl {
 
 class OpenClBuffer {
@@ -18,8 +20,17 @@ class OpenClBuffer {
   cl_mem mem() const;
   size_t byte_size() const;
 
-  absl::Status CopyFromHost(const void* data, size_t byte_size);
-  absl::Status CopyToHost(void* data, size_t byte_size);
+  absl::Status CopyFromHost(
+    const void* data, 
+    size_t offset, 
+    size_t byte_size
+  );
+
+  absl::Status CopyToHost(
+    void* data, 
+    size_t offset, 
+    size_t byte_size
+  );
 
  private:
   std::shared_ptr<OpenClRuntime> runtime_;

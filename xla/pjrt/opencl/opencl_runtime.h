@@ -32,7 +32,7 @@ class OpenClRuntime {
     cl_platform_id platform, cl_device_id device
   );
 
-  absl::StatusOr<cl_mem> Allocate(size_t byte_size);
+  absl::StatusOr<cl_mem> Allocate(size_t byte_size, cl_mem_flags flag);
 
   absl::Status CopyHostToDevice(cl_mem dst, const void* src, size_t byte_size);
   absl::Status CopyDeviceToHost(void* dst, cl_mem src, size_t byte_size);
@@ -48,6 +48,12 @@ class OpenClRuntime {
   cl_device_id device_;
   cl_context context_;
   cl_command_queue queue_;
+  OpenClRuntime(
+    cl_device_id device, 
+    cl_platform_id platform, 
+    cl_context context, 
+    cl_command_queue queue
+  );
 };
 
 }// namespace minecl
